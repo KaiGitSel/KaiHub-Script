@@ -1,0 +1,6 @@
+version-test.json
+.env*
+*.log
+*.luau
+.DS_Store
+Thumbs.db
