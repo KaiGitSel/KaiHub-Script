@@ -1155,7 +1155,9 @@ function DropM:_openList()
 	local ap, as = field.AbsolutePosition - lib.ScreenGui.AbsolutePosition, field.AbsoluteSize -- ScreenGui kaymasi (CoreGui -58) dusulur
 	local ih = dim("DropdownItemHeight")
 	local n = math.min(#self.Values, dim("DropdownMaxItems"))
-	local want = (n * ih + th.ListPad * 2) * sc
+	local searchable = self.Searchable
+	local sh = searchable and (ih + 4 + th.ListPad) or 0 -- arama kutusu + bosluk
+	local want = (n * ih + th.ListPad * 2 + sh) * sc
 	local vp = lib.ScreenGui.AbsoluteSize
 	local gap, m = 4 * sc, th.ScreenMargin
 	local below = vp.Y - (ap.Y + as.Y + gap) - m
@@ -1182,7 +1184,7 @@ function DropM:_openList()
 	corner(list, th.CornerField + 1)
 	bind(stroke(list), "Color", "Accent")
 	local sf = create("ScrollingFrame", {
-		BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(0, sh), Size = UDim2.new(1, 0, 1, -sh),
 		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollBarThickness = th.ScrollBar, ScrollBarImageColor3 = c.Dim,
 		ScrollingDirection = Enum.ScrollingDirection.Y, Parent = list,
@@ -1201,13 +1203,35 @@ function DropM:_openList()
 	end
 	local function refresh() for _, it in ipairs(items) do paint(it) end end
 	self._refresh = refresh
+	if searchable then -- arama kutusu: satirlar yeniden kurulmaz, yalniz Visible degisir (UIListLayout gizlileri atlar)
+		local field = create("Frame", { Name = "Search", BackgroundColor3 = c.Field, BorderSizePixel = 0,
+			Position = UDim2.fromOffset(th.ListPad, th.ListPad), Size = UDim2.new(1, -th.ListPad * 2, 0, ih + 4), Parent = list })
+		corner(field, th.CornerField)
+		local fst = stroke(field)
+		bind(fst, "Color", "Accent")
+		fst.Transparency = th.FieldStrokeAlpha
+		local box = create("TextBox", {
+			BackgroundTransparency = 1, BorderSizePixel = 0, ClearTextOnFocus = false, ClipsDescendants = true, Position = UDim2.fromOffset(th.FieldPadX, 0),
+			Size = UDim2.new(1, -th.FieldPadX * 2, 1, 0), FontFace = th.FontFace, TextSize = dim("ValueSize"), TextColor3 = c.Text, TextXAlignment = Enum.TextXAlignment.Left,
+			PlaceholderText = "Search", PlaceholderColor3 = c.Dim, Text = "", Parent = field,
+		})
+		table.insert(bag, box:GetPropertyChangedSignal("Text"):Connect(function()
+			local q = string.lower((string.gsub(box.Text, "^%s*(.-)%s*$", "%1")))
+			for _, it in ipairs(items) do
+				it.frame.Visible = q == "" or string.find(it.lower, q, 1, true) ~= nil
+			end
+			sf.CanvasPosition = Vector2.new(0, 0)
+		end))
+		table.insert(bag, box.Focused:Connect(function() fst.Transparency = 0 end))
+		table.insert(bag, box.FocusLost:Connect(function() fst.Transparency = T().FieldStrokeAlpha end))
+	end
 	for i, val in ipairs(self.Values) do
 		local frame = create("TextButton", { -- Active: girdi emilir, overlay'e ulasmaz
 			Text = "", AutoButtonColor = false, Active = true,
 			BorderSizePixel = 0, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, ih), LayoutOrder = i, Parent = sf,
 		})
 		corner(frame, th.CornerSmall)
-		local it = { frame = frame, val = val, hov = false }
+		local it = { frame = frame, val = val, hov = false, lower = searchable and string.lower(tostring(val)) or nil }
 		it.label = mkLabel(frame, tostring(val), {
 			Size = UDim2.new(1, -th.FieldPadX, 1, 0), Position = UDim2.fromOffset(th.FieldPadX / 2, 0), TextXAlignment = Enum.TextXAlignment.Center,
 			TextSize = dim("LabelSize"), TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = c.Muted,
@@ -1274,6 +1298,11 @@ function InputM:SetText(s) if self._label then self._label.Text = tostring(s) en
 
 local GroupM = {}
 GroupM.__index = GroupM
+
+-- Groupbox'in tamamini gizle/goster (gizliyken sutunda yer kaplamaz)
+function GroupM:SetVisible(v)
+	self.Container.Visible = v and true or false
+end
 
 function GroupM:_row(h, props)
 	self._n += 1
@@ -1575,7 +1604,8 @@ function GroupM:AddDropdown(idx, info)
 	local meas = mkLabel(field, "", { Name = "Measure", Visible = false, Size = UDim2.fromOffset(0, 0), TextSize = dim("ValueSize"), TextWrapped = false })
 	local obj = setmetatable({
 		Type = "Dropdown", Values = values, Value = value, Multi = multi, AllowNull = info.AllowNull and true or false,
-		Callback = info.Callback, _row = row, _name = info.Text, _field = field, _fstroke = fst, _text = txt, _scroll = self.Scroll, _hov = false, _meas = meas,
+		Searchable = info.Searchable and true or false,
+			Callback = info.Callback, _row = row, _name = info.Text, _field = field, _fstroke = fst, _text = txt, _scroll = self.Scroll, _hov = false, _meas = meas,
 	}, DropM)
 	obj:_display()
 	connect(txt:GetPropertyChangedSignal("AbsoluteSize"), function() obj:_display() end)
@@ -2855,7 +2885,17 @@ function Library:CreateWindow(cfg)
 	local ls = th.LauncherSize
 	local btn
 	local lpos = self._launcherPos or UDim2.fromOffset(th.LauncherPos.X, topInset() + th.LauncherPos.Y)
-	if markIds then
+	-- launcher gorseli (assets/v2/launcher-k2.png, cfg.Assets ile); yoksa asagidaki eski muhur/K'ya duser
+	local lkId = loadLogoAsset((type(cfg.Assets) == "table" and type(cfg.Assets.Folder) == "string" and cfg.Assets.Folder or "KaiHub/assets/v2") .. "/launcher-k2.png",
+		type(cfg.Assets) == "table" and type(cfg.Assets.Url) == "string" and (cfg.Assets.Url .. "launcher-k2.png") or nil)
+	if lkId then
+		btn = create("ImageButton", {
+			Name = "Launcher", AutoButtonColor = false, Visible = false, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
+			Image = lkId, ScaleType = Enum.ScaleType.Stretch, Size = UDim2.fromOffset(ls, ls), Position = lpos, Parent = gui,
+		})
+		corner(btn, th.LauncherCorner)
+		win.LauncherScale = create("UIScale", { Parent = btn })
+	elseif markIds then
 		btn = create("ImageButton", {
 			Name = "Launcher", AutoButtonColor = false, Visible = false, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
 			Size = UDim2.fromOffset(ls, ls), Position = lpos, Parent = gui,
@@ -3882,11 +3922,12 @@ return function(Library, U)
 		local btnH = compact and 36 or 22
 		local row = self:_row(0, { AutomaticSize = Enum.AutomaticSize.Y })
 		create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = row })
-		local head = create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, btnH), LayoutOrder = 1, Parent = row })
 		local search = info.Search == true
-		local btns = create("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(0, btnH), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1, Parent = head })
+		local lblH = search and (compact and 20 or 16) or 0 -- with All on/off the label gets its own line, the buttons sit below it
+		local head = create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, btnH + lblH), LayoutOrder = 1, Parent = row })
+		local btns = create("Frame", { AnchorPoint = Vector2.new(1, search and 1 or 0.5), Position = search and UDim2.fromScale(1, 1) or UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(0, btnH), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1, Parent = head })
 		create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Center, Parent = btns })
-		local lbl = mkLabel(head, info.Text or idx, { Size = UDim2.new(1, -(search and 168 or 64), 1, 0), TextColor3 = c.Muted, TextTruncate = Enum.TextTruncate.AtEnd })
+		local lbl = mkLabel(head, info.Text or idx, { Size = search and UDim2.new(1, 0, 0, lblH) or UDim2.new(1, -64, 1, 0), TextColor3 = c.Muted, TextTruncate = Enum.TextTruncate.AtEnd })
 		local obj = setmetatable({
 			Type = "PriorityList", Height = math.max(1, tonumber(info.Height) or 8), _row = row, _label = lbl,
 			_rows = {}, _order = {}, _on = {}, _vis = {}, _filter = "", _tags = type(info.Tags) == "table" and info.Tags or {}, _scroll = self.Scroll,
@@ -4238,6 +4279,817 @@ return function(Library, U)
 		pcall(function() self._pulse:Cancel() end)
 		if self.Gui then pcall(function() self.Gui:Destroy() end) end
 		if Library.Stats == self then Library.Stats = nil end
+	end
+end
+
+end)()(Library, Library._u)
+;(function()
+-- MapView: oyundan bagimsiz ust-gorunum harita bileseni (TASARIM 14, R-M4-3). Oyun bilgisi YOK: sahne/yol/nokta disaridan verilir.
+-- Katmanlar (alttan): ViewportFrame (klonlanan Part'lar) > izgara > yol kasasi+cizgi > yaricap halkalari > slot isaretleri > landmark pill > MapCanvas (tiklama) > ipucu.
+-- Dunya->ekran ve ekran->isin KENDI kamera matematigimizle (CFrame + FOV), motor WorldToViewportPoint'e bagli degil.
+-- API: MapView.new(parent, opts{ReadOnly, OnClick, Large, Slots}) | Library:AddMapView-> GroupM:AddMapView(idx,{Height})
+--   MV:SetScene(parts|model, bbox?{min,max}) ; :SetPlaneY(y) ; :SetCutaway(on, height) ; :SetTrack({Vector3}) ; :SetLandmarks({{pos,color,text,priority}})
+--   MV:SetMarkers({{key?,pos,color,label?,ring?(stud),bright?,slot?,tip?}}) ; :SetGrid(true,cell) | (center,radius,cell) | false
+--   MV:SetSlots({{id,name,color}}) ; :SetActiveSlot(id) ; :SetNext(key) ; :SetMessage(text?) ; :SetBanner(text?, "Warn"|"Error"|"Ok")
+--   MV:OnPick(fn(worldPos, ray{Origin,Direction}, slotId)) ; :OnSlot(fn(id)) ; :OnClear(fn(id)) ; :Fit() ; :Zoom(+1|-1) ; :ToggleAngle()
+--   MV:OpenLarge() / :CloseLarge() ; :Destroy()   (Destroy: ViewportFrame, klon sahne, baglantilar, buyuk editor, tween'ler temizlenir)
+return function(Library, U)
+	local T, create, stroke, corner, mkLabel = U.T, U.create, U.stroke, U.corner, U.mkLabel
+	local UIS, TS = U.Services.UIS, U.Services.Tween
+	local MV = {}
+	MV.__index = MV
+	local FOV, ZMIN, ZMAX, TILT = 30, 0.5, 6, math.rad(55)
+	local TAN = math.tan(math.rad(FOV / 2))
+	local function hex(s) return Color3.fromHex(s) end
+	local K = {
+		track = hex("8FE3FF"), case = hex("05070A"), pill = hex("0B0810"), pillText = hex("F3EAF4"), grid = hex("2A2033"),
+		bg0 = hex("0D0A12"), bg2 = hex("151019"), bg3 = hex("0F0B14"), dark = hex("0B0810"),
+	}
+	local function col(c) return typeof(c) == "Color3" and c or (typeof(c) == "string" and hex(c) or Color3.new(1, 1, 1)) end
+	local function reduced() return Library.ReduceMotion == true or T().ReduceMotion == true end
+	local function tw(inst, d, props, style, dir)
+		if reduced() then for k, v in pairs(props) do inst[k] = v end return end
+		TS:Create(inst, TweenInfo.new(d, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props):Play()
+	end
+
+	-- ince cizgi havuzu: Frame'ler yeniden kullanilir (yeniden cizimde tahsis yok)
+	local function poolNew(parent, z) return { parent = parent, list = {}, n = 0, z = z } end
+	local function seg(p, a, b, thick, color, transp)
+		p.n += 1
+		local f = p.list[p.n]
+		if not f then
+			f = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Parent = p.parent })
+			p.list[p.n] = f
+		end
+		local d = b - a
+		f.Visible = true
+		f.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+		f.Size = UDim2.fromOffset(d.Magnitude, thick)
+		f.Rotation = math.deg(math.atan2(d.Y, d.X))
+		f.BackgroundColor3, f.BackgroundTransparency = color, transp
+		return f
+	end
+	local function poolEnd(p) for i = p.n + 1, #p.list do p.list[i].Visible = false end p.n = 0 end
+
+	local function layer(root, name, z)
+		return create("Frame", { Name = name, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = z, ClipsDescendants = false, Parent = root })
+	end
+
+	function MV.new(parent, opts)
+		opts = opts or {}
+		local th = T()
+		local c = th.Colors
+		local self = setmetatable({
+			_o = opts, _conns = {}, _tweens = {}, _parts = nil, _bb = nil, _track = {}, _lm = {}, _mk = {}, _mkRec = {}, _slots = opts.Slots, _slot = nil,
+			_zoom = 1, _angled = false, _center = Vector3.zero, _planeY = nil, _grid = nil, _cut = nil, _gen = 0, _alive = true,
+			_pickCb = nil, _slotCb = nil, _clearCb = nil, _next = nil, _fx = {},
+		}, MV)
+		local root = create("Frame", { Name = "MapView", BackgroundColor3 = K.bg3, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ClipsDescendants = true, Parent = parent })
+		corner(root, opts.Large and 0 or 8)
+		self.Root = root
+		self._rootStroke = stroke(root, c.Line2 or c.Line)
+		self._rootStroke.Thickness = 1
+		local vp = create("ViewportFrame", {
+			Name = "World", BackgroundColor3 = K.bg3, BackgroundTransparency = 0, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ZIndex = 1,
+			Ambient = Color3.fromRGB(215, 215, 225), LightColor = Color3.fromRGB(110, 110, 120), LightDirection = Vector3.new(-0.3, -1, -0.2), Parent = root,
+		})
+		local cam = create("Camera", { FieldOfView = FOV, Parent = vp })
+		vp.CurrentCamera = cam
+		local wm = create("WorldModel", { Name = "W", Parent = vp })
+		self._vp, self._cam, self._wm = vp, cam, wm
+		self._gridL, self._caseL, self._trackL = layer(root, "Grid", 2), layer(root, "Case", 3), layer(root, "Track", 4)
+		self._ringL, self._markL, self._lmL, self._lineL = layer(root, "Rings", 5), layer(root, "Markers", 6), layer(root, "Landmarks", 7), layer(root, "LmLines", 6)
+		self._pGrid, self._pCase, self._pTrack, self._pLine = poolNew(self._gridL), poolNew(self._caseL), poolNew(self._trackL), poolNew(self._lineL)
+		self._pArrow = {}
+		self._lmRec = {}
+		-- vinyet: kenarlardan Bg3 %70 -> merkez saydam
+		for _, e in ipairs({ { "T", UDim2.new(1, 0, 0.2, 0), UDim2.fromScale(0, 0), 90 }, { "B", UDim2.new(1, 0, 0.2, 0), UDim2.fromScale(0, 0.8), 270 }, { "L", UDim2.new(0.14, 0, 1, 0), UDim2.fromScale(0, 0), 0 }, { "R", UDim2.new(0.14, 0, 1, 0), UDim2.fromScale(0.86, 0), 180 } }) do
+			local f = create("Frame", { Name = "Vig" .. e[1], BackgroundColor3 = K.bg3, BorderSizePixel = 0, Size = e[2], Position = e[3], ZIndex = 2, Parent = root })
+			create("UIGradient", { Rotation = e[4], Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 1) }), Parent = f })
+		end
+		-- mesaj + banner + ilerleme
+		self._msg = mkLabel(root, "", { Size = UDim2.new(1, -24, 0, 40), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = c.Muted, TextWrapped = true, Visible = false, ZIndex = 10 })
+		self._bannerF = create("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = K.pill, BackgroundTransparency = 0.08, BorderSizePixel = 0, Visible = false, ZIndex = 11, Parent = root })
+		corner(self._bannerF, 99)
+		self._bannerS = stroke(self._bannerF, c.Warn)
+		self._bannerS.Thickness = 1.5
+		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), Parent = self._bannerF })
+		self._banner = mkLabel(self._bannerF, "", { AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(), TextSize = 11, TextColor3 = K.pillText, Bold = true, ZIndex = 11 })
+		self._prog = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(0, 0, 0, 2), BackgroundColor3 = c.Accent, BorderSizePixel = 0, Visible = false, ZIndex = 11, Parent = root })
+		-- ipucu (isaret uzerine gelince)
+		self._tipF = create("Frame", { AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = K.pill, BackgroundTransparency = 0.08, BorderSizePixel = 0, Visible = false, ZIndex = 14, Parent = root })
+		corner(self._tipF, 99)
+		stroke(self._tipF, c.Line2 or c.Line).Thickness = 1
+		create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), Parent = self._tipF })
+		self._tip = mkLabel(self._tipF, "", { AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(), TextSize = 11, TextColor3 = K.pillText, ZIndex = 14 })
+		-- tiklama katmani
+		local canvas = create("TextButton", { Name = "MapCanvas", BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Size = UDim2.fromScale(1, 1), ZIndex = 9, Parent = root })
+		self._canvas = canvas
+		self:_bindInput()
+		table.insert(self._conns, root:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() self:_dirty() end))
+		table.insert(self._conns, root:GetPropertyChangedSignal("Visible"):Connect(function() self:_dirty() end))
+		if opts.ReadOnly then
+			self._hint = create("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = K.pill, BackgroundTransparency = 0.08, BorderSizePixel = 0, Visible = false, ZIndex = 12, Parent = root })
+			corner(self._hint, 99)
+			create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), Parent = self._hint })
+			mkLabel(self._hint, "Click to edit", { AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(), TextSize = 11, TextColor3 = K.pillText, ZIndex = 12 })
+			table.insert(self._conns, canvas.MouseEnter:Connect(function() self._hint.Visible = true; self._rootStroke.Color = c.Accent; self._rootStroke.Transparency = 0.5 end))
+			table.insert(self._conns, canvas.MouseLeave:Connect(function() self._hint.Visible = false; self._rootStroke.Color = c.Line2 or c.Line; self._rootStroke.Transparency = 0 end))
+		end
+		-- sekme/ust kutu gizlenince nabiz tween'leri durur (Fx yalniz pencere gorunurlugunu bilir)
+		local o = root
+		while o and not o:IsA("LayerCollector") do
+			if o:IsA("GuiObject") then table.insert(self._conns, o:GetPropertyChangedSignal("Visible"):Connect(function() self:_syncLive() end)) end
+			o = o.Parent
+		end
+		self._on = true
+		self:_syncLive()
+		if not self._unloadReg then
+			self._unloadReg = true
+			Library:OnUnload(function() if self._alive then self:Destroy() end end)
+		end
+		self:_dirty()
+		return self
+	end
+
+	-- ---- kamera / projeksiyon -------------------------------------------------
+	function MV:_live()
+		local o = self.Root
+		while o and not o:IsA("LayerCollector") do
+			if o:IsA("GuiObject") and not o.Visible then return false end
+			o = o.Parent
+		end
+		return true
+	end
+	-- gorunur degilken nabiz halkalari duraklar (Pause), gorununce surer; marker cizimi gorununce tazelenir
+	function MV:_syncLive()
+		local on = self:_live()
+		if on == self._on then return end
+		self._on = on
+		for _, rec in pairs(self._mkRec) do
+			if rec.pulse then
+				for _, t in ipairs(rec.pulse.tw) do pcall(function() if on then t:Play() else t:Pause() end end) end
+			end
+		end
+		if on then self:_dirty() end
+	end
+	function MV:IsLive() return self._alive and self._on ~= false end
+	function MV:_size() local s = self.Root.AbsoluteSize return math.max(s.X, 1), math.max(s.Y, 1) end
+	function MV:_planeYv() return self._planeY or self._planeAuto or (self._bb and (self._bb.min.Y + self._bb.max.Y) / 2) or 0 end
+	function MV:_fitDist(aspect)
+		local bb = self._bb
+		if not bb then return 100 end
+		local hx, hz = (bb.max.X - bb.min.X) / 2 * 1.08, (bb.max.Z - bb.min.Z) / 2 * 1.08
+		local d = math.max(hz / TAN, hx / (TAN * aspect), 20)
+		return self._angled and d * 1.1 or d
+	end
+	function MV:_cf(center, zoom)
+		local W, H = self:_size()
+		local d = self:_fitDist(W / H) / (zoom or self._zoom)
+		local tgt = Vector3.new((center or self._center).X, self:_planeYv(), (center or self._center).Z)
+		if self._angled then
+			return CFrame.lookAt(tgt + Vector3.new(0, math.sin(TILT), math.cos(TILT)) * d, tgt)
+		end
+		return CFrame.lookAt(tgt + Vector3.new(0, d, 0), tgt, Vector3.new(0, 0, -1))
+	end
+	function MV:_project(cf, p)
+		local W, H = self:_size()
+		local l = cf:PointToObjectSpace(p)
+		local depth = -l.Z
+		if depth < 0.5 then return nil end
+		local t = depth * TAN
+		return Vector2.new((l.X / (t * W / H) + 1) / 2 * W, (1 - l.Y / t) / 2 * H), depth
+	end
+	function MV:_ray(cf, x, y)
+		local W, H = self:_size()
+		local dir = cf:VectorToWorldSpace(Vector3.new((2 * x / W - 1) * TAN * W / H, (1 - 2 * y / H) * TAN, -1)).Unit
+		return cf.Position, dir
+	end
+	function MV:_onPlane(cf, x, y)
+		local o, d = self:_ray(cf, x, y)
+		if math.abs(d.Y) < 1e-4 then return nil, o, d end
+		local t = (self:_planeYv() - o.Y) / d.Y
+		if t <= 0 then return nil, o, d end
+		return o + d * t, o, d
+	end
+
+	-- ---- veri -----------------------------------------------------------------
+	function MV:_dirty()
+		if self._pend or not self._alive then return end
+		self._pend = true
+		task.defer(function() self._pend = false; if self._alive then self:_render() end end)
+	end
+	local function partsOf(src)
+		local out = {}
+		if typeof(src) == "Instance" then
+			for _, d in ipairs(src:GetDescendants()) do if d:IsA("BasePart") then out[#out + 1] = d end end
+			if src:IsA("BasePart") then out[#out + 1] = src end
+		elseif type(src) == "table" then
+			for _, p in ipairs(src) do if typeof(p) == "Instance" and p:IsA("BasePart") then out[#out + 1] = p end end
+		end
+		return out
+	end
+	local function bboxOf(parts)
+		local mn, mx = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
+		for _, p in ipairs(parts) do
+			local e = p.Size / 2
+			local h = Vector3.new(math.abs(p.CFrame.RightVector.X) * e.X + math.abs(p.CFrame.UpVector.X) * e.Y + math.abs(p.CFrame.LookVector.X) * e.Z,
+				math.abs(p.CFrame.RightVector.Y) * e.X + math.abs(p.CFrame.UpVector.Y) * e.Y + math.abs(p.CFrame.LookVector.Y) * e.Z,
+				math.abs(p.CFrame.RightVector.Z) * e.X + math.abs(p.CFrame.UpVector.Z) * e.Y + math.abs(p.CFrame.LookVector.Z) * e.Z)
+			mn, mx = mn:Min(p.Position - h), mx:Max(p.Position + h)
+		end
+		return { min = mn, max = mx }
+	end
+	local function ghost(p)
+		if p:IsA("MeshPart") then
+			local ok, cl = pcall(function() return p:Clone() end)
+			if ok and cl then cl:ClearAllChildren(); return cl end
+		end
+		local n = Instance.new("Part")
+		n.Size, n.CFrame, n.Color, n.Material, n.Transparency = p.Size, p.CFrame, p.Color, p.Material, p.Transparency
+		if p:IsA("Part") then n.Shape = p.Shape end
+		return n
+	end
+
+	-- parts: BasePart listesi ya da Model/Folder. Parca basina fazla ise ilk MaxParts (en buyuk hacimler) alinir -> "Simplified".
+	function MV:SetScene(src, bbox)
+		self._gen += 1
+		local gen = self._gen
+		for _, ch in ipairs(self._wm:GetChildren()) do ch:Destroy() end
+		self._clones = {}
+		local parts = partsOf(src)
+		local cap = self._o.MaxParts or 1500
+		self.Simplified = #parts > cap
+		if self.Simplified then
+			table.sort(parts, function(a, b) return a.Size.X * a.Size.Y * a.Size.Z > b.Size.X * b.Size.Y * b.Size.Z end)
+			for i = #parts, cap + 1, -1 do parts[i] = nil end
+		end
+		self._parts = parts
+		self._bb = bbox or (#parts > 0 and bboxOf(parts) or nil)
+		if self._bb then self._center = (self._bb.min + self._bb.max) / 2 end
+		local model = create("Model", { Name = "Scene", Parent = self._wm })
+		self._model = model
+		local total = #parts
+		task.spawn(function()
+			for i, p in ipairs(parts) do
+				if gen ~= self._gen or not self._alive then return end
+				local cl = ghost(p)
+				cl.Anchored, cl.CanCollide, cl.CanQuery, cl.CanTouch = true, false, false, false
+				self._clones[i] = { part = cl, top = p.Position.Y + p.Size.Y / 2 }
+				cl.Parent = model
+				if i % 120 == 0 then
+					self:_progress(i, total)
+					task.wait()
+				end
+			end
+			if gen == self._gen then self:_progress(total, total); self:_applyCut(); self:_dirty() end
+		end)
+		self:_dirty()
+	end
+	function MV:_progress(i, total)
+		if i >= total then
+			self._prog.Visible = false
+			self._msg.Visible = false
+			return
+		end
+		self._prog.Visible = true
+		self._prog.Size = UDim2.new(i / total, 0, 0, 2)
+		self._msg.Text = string.format("Building preview... %d/%d parts", i, total)
+		self._msg.Visible = true
+	end
+	function MV:SetPlaneY(y) self._planeY = y; self:_dirty() end
+	function MV:SetCutaway(on, height)
+		self._cut = on and (height or 8) or nil
+		self:_applyCut()
+	end
+	function MV:_applyCut()
+		if not self._clones then return end
+		local lim = self._cut and (self:_planeYv() + self._cut)
+		for _, e in ipairs(self._clones) do
+			e.part.Parent = (lim and e.top > lim) and nil or self._model
+		end
+	end
+	function MV:SetTrack(pts) self._track = pts or {}
+		local n, s = #self._track, 0
+		for _, p in ipairs(self._track) do s += p.Y end
+		self._planeAuto = n > 0 and s / n or nil
+		self:_dirty()
+	end
+	function MV:SetLandmarks(list) self._lm = list or {}; self:_dirty() end
+	function MV:SetMarkers(list) self._mk = list or {}; self:_dirty() end
+	function MV:SetGrid(a, b, c2)
+		if a == true then self._grid = { cell = b or 12 }
+		elseif typeof(a) == "Vector3" then self._grid = { center = a, radius = b or 100, cell = c2 or 12 }
+		else self._grid = nil end
+		self:_dirty()
+	end
+	function MV:SetSlots(list) self._slots = list; self:_dirty(); if self._large then self._large:SetSlots(list) end end
+	function MV:SetActiveSlot(id) self._slot = id; self:_dirty(); if self._large then self._large:SetActiveSlot(id) end end
+	function MV:SetNext(key) self._next = key; self:_dirty() end
+	function MV:SetMessage(text)
+		self._msg.Text = text or ""
+		self._msg.Visible = text ~= nil and text ~= ""
+	end
+	function MV:SetBanner(text, kind)
+		self._bannerF.Visible = text ~= nil and text ~= ""
+		if not self._bannerF.Visible then return end
+		self._banner.Text = text
+		self._bannerS.Color = T().Colors[kind or "Warn"] or T().Colors.Warn
+	end
+	function MV:OnPick(fn) self._pickCb = fn end
+	function MV:OnSlot(fn) self._slotCb = fn end
+	function MV:OnClear(fn) self._clearCb = fn end
+	function MV:Fit()
+		self._zoom = 1
+		if self._bb then self._center = (self._bb.min + self._bb.max) / 2 end
+		self:_dirty()
+	end
+	function MV:Zoom(dir) self._zoom = math.clamp(self._zoom * (dir > 0 and 1.25 or 0.8), ZMIN, ZMAX); self:_dirty() end
+	function MV:ToggleAngle() self._angled = not self._angled; self:_dirty(); return self._angled end
+
+	-- ---- giris: sureukle=pan, tekerlek/pinch=zoom, kisa dokunus=nokta ---------------
+	function MV:_bindInput()
+		local canvas, o = self._canvas, self._o
+		local press
+		U.track(canvas, function(input)
+			local x, y = self:_toLocal(input)
+			press = { start = Vector2.new(x, y), cf = self:_cf(), center = self._center, moved = false }
+			press.w0 = self:_onPlane(press.cf, x, y)
+		end, function(input)
+			if not press or o.ReadOnly then return end
+			local x, y = self:_toLocal(input)
+			if (Vector2.new(x, y) - press.start).Magnitude > 4 then press.moved = true end
+			if press.moved and press.w0 then
+				local w1 = self:_onPlane(press.cf, x, y)
+				if w1 then
+					local d = press.w0 - w1
+					self._center = press.center + Vector3.new(d.X, 0, d.Z)
+					self:_dirty()
+				end
+			end
+		end, function(input)
+			local p = press
+			press = nil
+			if not p or p.moved then return end
+			if o.ReadOnly then if o.OnClick then o.OnClick() end return end
+			self:_click(self:_toLocal(input))
+		end, self._conns)
+		table.insert(self._conns, canvas.InputChanged:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseWheel then
+				if not o.ReadOnly then self:Zoom(input.Position.Z) end
+			elseif input.UserInputType == Enum.UserInputType.MouseMovement and not press then
+				self:_hover(self:_toLocal(input))
+			end
+		end))
+		table.insert(self._conns, canvas.MouseLeave:Connect(function() self:_hover(-999, -999) end))
+		table.insert(self._conns, UIS.TouchPinch:Connect(function(_, scale, _, state)
+			if o.ReadOnly or not self.Root.Visible then return end
+			if state == Enum.UserInputState.Begin then self._pz = self._zoom end
+			if self._pz then self._zoom = math.clamp(self._pz * scale, ZMIN, ZMAX); self:_dirty() end
+		end))
+	end
+	-- InputObject.Position (inset'siz) -> Root yerel pikseli. IgnoreGuiInset=true ScreenGui'de AbsolutePosition inset dahil uzayda.
+	function MV:_toLocal(input)
+		local g = self.Root:FindFirstAncestorWhichIsA("ScreenGui")
+		local ins = (g and g.IgnoreGuiInset) and U.Services.Gui:GetGuiInset() or Vector2.zero
+		local ap = self.Root.AbsolutePosition
+		return input.Position.X + ins.X - ap.X, input.Position.Y + ins.Y - ap.Y
+	end
+	-- fare isaretin 18px yakininda: buyut + ipucu (tiklama MapCanvas'ta kalir)
+	function MV:_hover(x, y)
+		local best, bd = nil, 18
+		for key, rec in pairs(self._mkRec) do
+			if rec.sx then
+				local d = math.sqrt((rec.sx - x) ^ 2 + (rec.sy - y) ^ 2)
+				if d <= bd then best, bd = key, d end
+			end
+		end
+		if best == self._hovKey then return end
+		local old = self._mkRec[self._hovKey]
+		if old then tw(old.dotScale, 0.1, { Scale = 1 }) end
+		self._hovKey = best
+		local rec = best and self._mkRec[best]
+		if rec then
+			tw(rec.dotScale, 0.1, { Scale = 1.25 })
+			if rec.tipText then
+				self._tip.Text = rec.tipText
+				self._tipF.Position = UDim2.fromOffset(math.min(rec.sx + 14, self.Root.AbsoluteSize.X - 150), math.max(rec.sy - 30, 2))
+				self._tipF.Visible = true
+				return
+			end
+		end
+		self._tipF.Visible = false
+	end
+	function MV:_click(x, y)
+		local cf = self:_cf()
+		local pt, o, d = self:_onPlane(cf, x, y)
+		if not pt then return end
+		self:_ripple(x, y)
+		if self._pickCb then task.spawn(self._pickCb, pt, { Origin = o, Direction = d }, self._slot) end
+	end
+	function MV:_ripple(x, y)
+		if reduced() then return end
+		local f = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(6, 6), BackgroundTransparency = 1, ZIndex = 8, Parent = self.Root })
+		corner(f, 99)
+		local s = stroke(f, T().Colors.Text)
+		s.Thickness = 1.5
+		tw(f, 0.35, { Size = UDim2.fromOffset(34, 34) })
+		tw(s, 0.35, { Transparency = 1 })
+		task.delay(0.4, function() f:Destroy() end)
+	end
+
+	-- ---- cizim ----------------------------------------------------------------
+	local function pillW(text) return #text * 6.3 + 30 end
+	function MV:_render()
+		local root = self.Root
+		if not root.Visible or self._on == false then return end
+		local W, H = self:_size()
+		if root.AbsoluteSize.X < 4 then return end
+		local th = T()
+		local c = th.Colors
+		local cf = self:_cf()
+		self._cam.CFrame = cf
+		self._curCf = cf
+		local small = H < 260
+		-- izgara
+		local g = self._grid
+		if g and self._bb then
+			local bb = self._bb
+			local x0, x1, z0, z1 = bb.min.X, bb.max.X, bb.min.Z, bb.max.Z
+			if g.center then x0, x1, z0, z1 = g.center.X - g.radius, g.center.X + g.radius, g.center.Z - g.radius, g.center.Z + g.radius end
+			local cell, y = g.cell, self:_planeYv()
+			local n = 0
+			for x = math.ceil(x0 / cell) * cell, x1, cell do
+				n += 1
+				local a, b = self:_project(cf, Vector3.new(x, y, z0)), self:_project(cf, Vector3.new(x, y, z1))
+				if a and b then seg(self._pGrid, a, b, 1, K.grid, (math.floor(x / cell) % 4 == 0) and 0.35 or 0.6) end
+			end
+			for z = math.ceil(z0 / cell) * cell, z1, cell do
+				local a, b = self:_project(cf, Vector3.new(x0, y, z)), self:_project(cf, Vector3.new(x1, y, z))
+				if a and b then seg(self._pGrid, a, b, 1, K.grid, (math.floor(z / cell) % 4 == 0) and 0.35 or 0.6) end
+			end
+		end
+		poolEnd(self._pGrid)
+		-- yol: kasa (5px koyu) + 3px cizgi + her ~120px ok ucu
+		local sp = {}
+		for _, p in ipairs(self._track) do sp[#sp + 1] = self:_project(cf, p) end
+		for i = 1, #sp - 1 do
+			if sp[i] and sp[i + 1] then
+				seg(self._pCase, sp[i], sp[i + 1], 5, K.case, 0.45)
+				seg(self._pTrack, sp[i], sp[i + 1], 3, K.track, 0)
+			end
+		end
+		poolEnd(self._pCase); poolEnd(self._pTrack)
+		local ai, acc = 0, 0
+		for i = 1, #sp - 1 do
+			local a, b = sp[i], sp[i + 1]
+			if a and b then
+				local len = (b - a).Magnitude
+				acc += len
+				if acc >= 120 then
+					acc = 0
+					ai += 1
+					local lbl = self._pArrow[ai]
+					if not lbl then
+						lbl = mkLabel(self._trackL, "▶", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(12, 12), TextSize = 9, TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = K.pillText, ZIndex = 5 })
+						self._pArrow[ai] = lbl
+					end
+					lbl.Visible = true
+					lbl.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+					lbl.Rotation = math.deg(math.atan2(b.Y - a.Y, b.X - a.X))
+				end
+			end
+		end
+		for i = ai + 1, #self._pArrow do self._pArrow[i].Visible = false end
+		self:_renderMarkers(cf, small)
+		self:_renderLandmarks(cf, W, H)
+		poolEnd(self._pLine)
+	end
+
+	local function circle(parent, size, color, z)
+		local f = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(size, size), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z, Parent = parent })
+		corner(f, 99)
+		return f
+	end
+	function MV:_renderMarkers(cf, small)
+		local th = T()
+		local seen, anyBright = {}, false
+		for _, m in ipairs(self._mk) do if m.bright then anyBright = true end end
+		local sz = small and 14 or 18
+		for i, m in ipairs(self._mk) do
+			local key = m.key or (m.slot ~= nil and ("s" .. tostring(m.slot))) or ("i" .. i)
+			seen[key] = true
+			local sp = self:_project(cf, m.pos)
+			local rec = self._mkRec[key]
+			if not rec then
+				rec = { fresh = true }
+				rec.ring = circle(self._ringL, 10, col(m.color), 1)
+				rec.ringS = stroke(rec.ring, col(m.ringColor or m.color))
+				rec.ringS.Thickness = 1.5
+				rec.ringScale = create("UIScale", { Scale = reduced() and 1 or 0, Parent = rec.ring })
+				rec.dot = circle(self._markL, sz, col(m.color), 1)
+				stroke(rec.dot, K.bg0).Thickness = 2
+				rec.dotScale = create("UIScale", { Scale = reduced() and 1 or 0.4, Parent = rec.dot })
+				rec.num = mkLabel(rec.dot, "", { Size = UDim2.fromScale(1, 1), TextSize = small and 9 or 10, TextXAlignment = Enum.TextXAlignment.Center, Bold = true, ZIndex = 2 })
+				self._mkRec[key] = rec
+				if not reduced() then
+					tw(rec.dotScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+					tw(rec.ringScale, 0.35, { Scale = 1 })
+				end
+			end
+			rec.seen = true
+			rec.tipText = m.tip
+			local rgb = col(m.color)
+			rec.dot.BackgroundColor3, rec.ring.BackgroundColor3 = rgb, rgb
+			rec.ringS.Color = col(m.ringColor or m.color)
+			rec.dot.Size = UDim2.fromOffset(sz, sz)
+			rec.num.Text = m.label and tostring(m.label) or ""
+			rec.num.TextColor3 = m.light and K.dark or K.pillText
+			local isNext = m.bright or (self._next ~= nil and self._next == key)
+			rec.dot.BackgroundTransparency = (anyBright and not isNext) and 0.2 or 0
+			rec.ringS.Transparency, rec.ring.BackgroundTransparency = 0.35, 0.88
+			rec.visible = sp ~= nil
+			rec.dot.Visible, rec.ring.Visible = sp ~= nil, sp ~= nil
+			rec.sx, rec.sy = sp and sp.X, sp and sp.Y
+			if sp then
+				rec.dot.Position, rec.ring.Position = UDim2.fromOffset(sp.X, sp.Y), UDim2.fromOffset(sp.X, sp.Y)
+				local rpx = 10
+				if m.ring and m.ring > 0 then
+					local e = self:_project(cf, m.pos + Vector3.new(m.ring, 0, 0))
+					if e then rpx = math.max((e - sp).Magnitude * 2, 10) end
+				end
+				rec.ring.Size = UDim2.fromOffset(rpx, rpx)
+			end
+			-- sirada: nabiz halkasi (2 sn, motor tween'i, Fx kaydi)
+			if isNext and not rec.pulse then
+				local pf = circle(self._markL, 30, Color3.new(), 0)
+				pf.BackgroundTransparency = 1
+				local ps = stroke(pf, th.Colors.Glow or th.Colors.Accent)
+				ps.Thickness = 2
+				local sc = create("UIScale", { Parent = pf })
+				rec.pulse = { f = pf, s = ps, sc = sc }
+				local t1 = TS:Create(sc, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, -1), { Scale = 2.4 })
+				local t2 = TS:Create(ps, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, -1), { Transparency = 1 })
+				rec.pulse.tw = { t1, t2 }
+				for _, t in ipairs(rec.pulse.tw) do
+					if Library.Fx and not reduced() then
+						Library.Fx:add(t, function() sc.Scale = 1; ps.Transparency = 0.5 end, function() sc.Scale = 1; ps.Transparency = 0.2 end)
+					elseif not reduced() then t:Play() end
+				end
+				if reduced() then ps.Transparency = 0.5 end
+				if self._on == false then for _, t in ipairs(rec.pulse.tw) do pcall(function() t:Pause() end) end end
+			elseif not isNext and rec.pulse then
+				for _, t in ipairs(rec.pulse.tw) do pcall(function() t:Cancel() end) end
+				rec.pulse.f:Destroy()
+				rec.pulse = nil
+			end
+			if rec.pulse and sp then rec.pulse.f.Position = UDim2.fromOffset(sp.X, sp.Y) end
+		end
+		for key, rec in pairs(self._mkRec) do
+			if not seen[key] then
+				self._mkRec[key] = nil
+				if rec.pulse then for _, t in ipairs(rec.pulse.tw) do pcall(function() t:Cancel() end) end rec.pulse.f:Destroy() end
+				tw(rec.dotScale, 0.18, { Scale = 0 })
+				tw(rec.ringScale, 0.18, { Scale = 0 })
+				task.delay(0.22, function() rec.dot:Destroy(); rec.ring:Destroy() end)
+			end
+		end
+	end
+
+	-- pill'ler: oncelik You > Spawn > Base (kucuk sayi once); once yatay 6px it, sonra dikey kaydir
+	function MV:_renderLandmarks(cf, W, H)
+		local list = {}
+		for _, l in ipairs(self._lm) do list[#list + 1] = l end
+		table.sort(list, function(a, b) return (a.priority or 9) < (b.priority or 9) end)
+		local placed, used = {}, 0
+		local ph = 20
+		for _, l in ipairs(list) do
+			local sp = self:_project(cf, l.pos)
+			if sp then
+				used += 1
+				local rec = self._lmRec[used]
+				if not rec then
+					local f = create("Frame", { BackgroundColor3 = K.pill, BackgroundTransparency = 0.08, BorderSizePixel = 0, Size = UDim2.fromOffset(60, ph), ZIndex = 1, Parent = self._lmL })
+					corner(f, 99)
+					local s = stroke(f, Color3.new(1, 1, 1))
+					s.Thickness = 1.5
+					local d = create("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 7, 0.5, 0), Size = UDim2.fromOffset(8, 8), BorderSizePixel = 0, ZIndex = 2, Parent = f })
+					corner(d, 99)
+					local t = mkLabel(f, "", { Position = UDim2.fromOffset(20, 0), Size = UDim2.new(1, -24, 1, 0), TextSize = 11, Bold = true, TextColor3 = K.pillText, ZIndex = 2 })
+					rec = { f = f, s = s, d = d, t = t }
+					self._lmRec[used] = rec
+				end
+				local w = pillW(l.text or "")
+				local colr = col(l.color)
+				rec.f.Visible = true
+				rec.s.Color, rec.d.BackgroundColor3 = colr, colr
+				rec.t.Text = l.text or ""
+				rec.f.Size = UDim2.fromOffset(w, ph)
+				local bx, by = sp.X - w / 2, sp.Y - ph - 10
+				local function free(x, y)
+					for _, r in ipairs(placed) do
+						if x < r.x + r.w + 2 and x + w + 2 > r.x and y < r.y + ph + 2 and y + ph + 2 > r.y then return false end
+					end
+					return true
+				end
+				local x, y = bx, by
+				if not free(x, y) then
+					local done = false
+					for _, dx in ipairs({ w + 6, -(w + 6) }) do
+						if free(bx + dx, by) then x, done = bx + dx, true; break end
+					end
+					if not done then
+						for k = 1, 8 do
+							if free(bx, by - k * (ph + 2)) then y = by - k * (ph + 2); break end
+							if free(bx, by + k * (ph + 2)) then y = by + k * (ph + 2); break end
+						end
+					end
+				end
+				x = math.clamp(x, 2, math.max(2, W - w - 2))
+				y = math.clamp(y, 2, math.max(2, H - ph - 2))
+				placed[#placed + 1] = { x = x, y = y, w = w }
+				rec.f.Position = UDim2.fromOffset(x, y)
+				seg(self._pLine, Vector2.new(x + w / 2, y + ph), sp, 1, colr, 0.2)
+			end
+		end
+		for i = used + 1, #self._lmRec do self._lmRec[i].f.Visible = false end
+	end
+
+	-- ---- buyuk editor ---------------------------------------------------------
+	function MV:CloseLarge()
+		local L = self._largeUI
+		if not L then return end
+		self._largeUI, self._large = nil, nil
+		for _, cn in ipairs(L.conns) do pcall(function() cn:Disconnect() end) end
+		L.mv:Destroy()
+		tw(L.win, 0.12, { Size = UDim2.fromOffset(L.win.AbsoluteSize.X * 0.96, L.win.AbsoluteSize.Y * 0.96) })
+		task.delay(0.13, function() L.gui:Destroy() end)
+	end
+	function MV:OpenLarge()
+		if self._largeUI or not self._alive then return end
+		local th = T()
+		local c = th.Colors
+		local vs = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+		local compact = vs.X < 700 or UIS.TouchEnabled
+		local gui = create("ScreenGui", { Name = "KaiMapEditor", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = th.DisplayOrder + 2 })
+		if U.mountGui then U.mountGui(gui) end
+		if not gui.Parent then gui.Parent = Library.ScreenGui and Library.ScreenGui.Parent or nil end
+		local L = { gui = gui, conns = {} }
+		self._largeUI = L
+		local scrim = create("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(), BackgroundTransparency = 1, BorderSizePixel = 0, Parent = gui })
+		tw(scrim, 0.15, { BackgroundTransparency = 0.45 })
+		local ww, wh = compact and vs.X or math.min(vs.X - 48, 1100), compact and vs.Y or math.min(vs.Y - 48, 640)
+		local win = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(ww * 0.96, wh * 0.96), BackgroundColor3 = K.bg0, BorderSizePixel = 0, ClipsDescendants = true, Parent = gui })
+		L.win = win
+		corner(win, compact and 0 or 12)
+		stroke(win, c.Line2 or c.Line).Thickness = 1
+		tw(win, 0.2, { Size = UDim2.fromOffset(ww, wh) })
+		local acc = create("Frame", { Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = c.Accent, BorderSizePixel = 0, ZIndex = 5, Parent = win })
+		create("UIGradient", { Color = ColorSequence.new(c.Accent, c.Accent2 or c.Accent), Parent = acc })
+		local topH, botH, pickH = compact and 40 or 44, compact and 44 or 40, 36
+		mkLabel(win, self._o.Title or "Map positions", { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -110, 0, topH), TextSize = 14, Bold = true, ZIndex = 4 })
+		local function btn(parent, text, w, h, x, y, fn, filled)
+			local b = create("TextButton", { Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), BackgroundColor3 = filled and c.Accent or K.bg2, AutoButtonColor = false, Text = text, FontFace = th.FontFaceBold, TextSize = 12, TextColor3 = filled and c.AccentText or c.Text, ZIndex = 6, Parent = parent })
+			corner(b, 8)
+			if not filled then stroke(b, c.Line).Thickness = 1 end
+			table.insert(L.conns, b.Activated:Connect(fn))
+			return b
+		end
+		btn(win, "Close", 56, 28, 0, 8, function() self:CloseLarge() end).Position = UDim2.new(1, -66, 0, 8)
+		-- slot secici
+		local y0 = topH
+		local bar = create("ScrollingFrame", { Position = UDim2.fromOffset(10, y0), Size = UDim2.new(1, -20, 0, pickH), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, ScrollingDirection = Enum.ScrollingDirection.X, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.X, ZIndex = 4, Parent = win })
+		create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = bar })
+		local hint = mkLabel(win, "", { Position = UDim2.fromOffset(14, y0 + pickH + 8), Size = UDim2.new(1, compact and -28 or -330, 0, 24), TextSize = compact and 12 or 14, TextColor3 = c.Text2 or c.Text, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4 })
+		if not compact then
+			mkLabel(win, '<font color="#FF5A4A">●</font> Spawn   <font color="#6FE0A8">●</font> Base   <font color="#8FE3FF">━</font> Track   <font color="#8FE3FF">●</font> You', { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, y0 + pickH + 8), Size = UDim2.fromOffset(300, 24), TextSize = 13, RichText = true, TextColor3 = c.Text2 or c.Text, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 4 })
+		end
+		local mapTop = y0 + pickH + 38
+		local holder = create("Frame", { Position = UDim2.fromOffset(10, mapTop), Size = UDim2.new(1, -20, 1, -(mapTop + botH + 8)), BackgroundTransparency = 1, Parent = win })
+		local lv = MV.new(holder, { Large = false, MaxParts = self._o.MaxParts })
+		lv._o.Large = true
+		L.mv = lv
+		self._large = lv
+		-- veri aynasi: klon sahneyi tekrar insa etmek yerine modeli kopyala
+		local function mirror()
+			lv._bb, lv._planeY, lv._planeAuto, lv._track, lv._lm, lv._mk, lv._grid, lv._cut, lv._next = self._bb, self._planeY, self._planeAuto, self._track, self._lm, self._mk, self._grid, self._cut, self._next
+			lv._center, lv._slots, lv._slot = self._center, self._slots, self._slot
+			if self._model then
+				lv._gen += 1
+				for _, ch in ipairs(lv._wm:GetChildren()) do ch:Destroy() end
+				lv._model = self._model:Clone()
+				lv._model.Parent = lv._wm
+				lv._clones = {}
+				for i, e in ipairs(self._clones or {}) do
+					local twin = lv._model:GetChildren()[i]
+					if twin then lv._clones[i] = { part = twin, top = e.top } end
+				end
+			end
+		end
+		mirror()
+		lv._pickCb = function(pt, ray, slot) if self._pickCb then self._pickCb(pt, ray, slot) end end
+		local function hintText()
+			local nm
+			for _, s in ipairs(self._slots or {}) do if s.id == self._slot then nm = s.name end end
+			hint.Text = nm and ("Saving for " .. nm) or "Pick All or a slot, then click the map to save."
+		end
+		local btns = {}
+		local function paintSlots()
+			for _, b in ipairs(btns) do
+				local on = b.id == self._slot
+				b.f.BackgroundColor3 = on and b.color or K.bg2
+				b.f.BackgroundTransparency = on and 0.84 or 0
+				b.s.Color = on and b.color or c.Line
+				b.s.Thickness = on and 1.5 or 1
+				b.t.TextColor3 = on and c.Text or c.Muted
+			end
+			hintText()
+		end
+		for i, s in ipairs(self._slots or {}) do
+			local w = compact and 56 or math.max(60, #s.name * 7 + 36)
+			local f = create("TextButton", { Size = UDim2.fromOffset(w, pickH - 2), BackgroundColor3 = K.bg2, AutoButtonColor = false, Text = "", LayoutOrder = i, ZIndex = 5, Parent = bar })
+			corner(f, 8)
+			local st = stroke(f, c.Line)
+			local d = circle(f, 8, col(s.color), 6)
+			d.Position = UDim2.new(0, 14, 0.5, 0)
+			local t = mkLabel(f, compact and tostring(s.short or s.name) or s.name, { Position = UDim2.fromOffset(26, 0), Size = UDim2.new(1, -30, 1, 0), TextSize = 12, ZIndex = 6 })
+			btns[#btns + 1] = { id = s.id, f = f, s = st, t = t, color = col(s.color) }
+			table.insert(L.conns, f.Activated:Connect(function()
+				self._slot = s.id
+				paintSlots()
+				self:_dirty()
+				if self._slotCb then self._slotCb(s.id) end
+			end))
+		end
+		paintSlots()
+		-- alt arac cubugu
+		local bot = create("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 10, 1, -6), Size = UDim2.new(1, -20, 0, botH - 6), BackgroundTransparency = 1, ZIndex = 4, Parent = win })
+		create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Center, Parent = bot })
+		local function tb(text, w, order, fn, filled)
+			local b = btn(bot, text, w, botH - 8, 0, 0, fn, filled)
+			b.LayoutOrder = order
+			b.Position = UDim2.new()
+			return b
+		end
+		tb("-", 36, 1, function() lv:Zoom(-1) end)
+		tb("+", 36, 2, function() lv:Zoom(1) end)
+		local angBtn
+		angBtn = tb(compact and "Top" or "Top / angled", compact and 56 or 96, 3, function() local a = lv:ToggleAngle(); angBtn.Text = a and (compact and "Tilt" or "Angled") or (compact and "Top" or "Top / angled") end)
+		tb(compact and "Fit" or "Fit map", compact and 48 or 80, 4, function() lv:Fit() end)
+		tb(compact and "Del" or "Clear point", compact and 48 or 96, 5, function() if self._clearCb then self._clearCb(self._slot) end end)
+		local done = tb("Done", 80, 6, function() self:CloseLarge() end, true)
+		done.Parent = win
+		done.AnchorPoint = Vector2.new(1, 1)
+		done.Position = UDim2.new(1, -10, 1, -8)
+		table.insert(L.conns, UIS.InputBegan:Connect(function(i, gp)
+			if i.KeyCode == Enum.KeyCode.Escape then self:CloseLarge() end
+		end))
+		L.paint = paintSlots
+		lv:Fit()
+		task.defer(function() if lv._alive then lv:_dirty() end end)
+	end
+
+	-- dis veri degisince acik buyuk editoru da guncelle
+	local function syncLarge(self)
+		local lv = self._large
+		if not lv then return end
+		lv._track, lv._lm, lv._mk, lv._grid, lv._next, lv._slots, lv._slot, lv._planeY = self._track, self._lm, self._mk, self._grid, self._next, self._slots, self._slot, self._planeY
+		if self._largeUI and self._largeUI.paint then self._largeUI.paint() end
+		lv:_dirty()
+	end
+	local baseDirty = MV._dirty
+	function MV:_dirty()
+		baseDirty(self)
+		if self._large and not self._syncing then self._syncing = true; syncLarge(self); self._syncing = false end
+	end
+
+	function MV:Destroy()
+		if not self._alive then return end
+		self._alive = false
+		self._gen += 1
+		self:CloseLarge()
+		for _, rec in pairs(self._mkRec) do
+			if rec.pulse then for _, t in ipairs(rec.pulse.tw) do pcall(function() t:Cancel() end) end end
+		end
+		table.clear(self._mkRec)
+		for _, cn in ipairs(self._conns) do pcall(function() cn:Disconnect() end) end
+		table.clear(self._conns)
+		self._clones, self._parts, self._model = nil, nil, nil
+		if self._wm then self._wm:ClearAllChildren() end
+		if self._vp then self._vp.CurrentCamera = nil; self._vp:Destroy() end
+		if self.Root then self.Root:Destroy() end
+	end
+
+	Library.MapView = MV
+	function U.GroupM:AddMapView(idx, info)
+		info = info or {}
+		local row = self:_row(info.Height or 230)
+		local mv = MV.new(row, { ReadOnly = info.ReadOnly ~= false, OnClick = info.OnClick, Title = info.Title, Slots = info.Slots, MaxParts = info.MaxParts })
+		mv.Type = "MapView"
+		Library.MapViews = Library.MapViews or {}
+		Library.MapViews[idx] = mv
+		if mv._o.ReadOnly then mv._o.OnClick = mv._o.OnClick or function() mv:OpenLarge() end end
+		return mv
 	end
 end
 
