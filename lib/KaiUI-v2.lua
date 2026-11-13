@@ -168,6 +168,7 @@ local Library = {
 		},
 		ReduceMotion = false, -- true: pencere animasyonlari anlik
 		UIScaleMin = 0.7, UIScaleMax = 1.3, UIScaleDefault = 1, -- kullanici arayuz carpani (Library:SetUIScale)
+		ScaleGripHit = 20, ScaleGripHitMobile = 28, ScaleGripAlpha = 0.45, -- sag alt kose olcek tutamaci (dokunma alani px, bostaki nokta saydamligi)
 		MobileMinScale = 0.6,
 		MobileScaleFactor = 0.95,
 	},
@@ -686,6 +687,19 @@ local function esc(s)
 	return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
+-- Labels (deger -> kisa aciklama, Dropdown/PriorityList): satirda ad + soluk aciklama; deger (kayit) degismez.
+-- Doner: metin, RichText gerekir mi, arama icin kucuk harf metin, duz metin (olcum/tooltip; aciklama yoksa nil).
+-- twoLine: aciklama alt satirda (PriorityList satiri), yoksa ayni satirda.
+local function itemText(val, labels, size, twoLine)
+	local s = tostring(val)
+	local ex = type(labels) == "table" and labels[val] or nil
+	if ex == nil or ex == "" then return s, false, string.lower(s), nil end
+	ex = tostring(ex)
+	local sz = size and (' size="' .. math.max(8, math.floor(size - (twoLine and 2 or 1))) .. '"') or ""
+	return esc(s) .. (twoLine and "\n" or "  ") .. '<font transparency="0.45"' .. sz .. ">" .. esc(ex) .. "</font>", true,
+		string.lower(s .. " " .. ex), s .. "  " .. ex
+end
+
 -- Onay isareti: iki donuk cubuk (Gotham'da check glifi yok). Dondurulen Frame Visible ile acilip kapanir.
 local function makeCheck(parent, color)
 	local box = create("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = parent })
@@ -1174,6 +1188,17 @@ function DropM:_openList()
 		y = ap.Y - gap - hs
 	end
 	local width = as.X
+	if self.Labels and self._meas then -- Labels: liste kutudan genis olabilir (ad + aciklama sigsin), ekranla sinirli
+		local meas, need = self._meas, 0
+		meas.TextSize = dim("LabelSize")
+		for _, v in ipairs(self.Values) do
+			local _, _, _, plain = itemText(v, self.Labels)
+			meas.Text = plain or tostring(v)
+			need = math.max(need, meas.TextBounds.X)
+		end
+		meas.TextSize = dim("ValueSize")
+		width = math.min(math.max(width, (need + th.FieldPadX * 2 + th.ListPad * 2 + th.ScrollBar + 6) * sc), vp.X - m * 2)
+	end
 	local x = math.clamp(ap.X, m, math.max(m, vp.X - width - m))
 
 	local bag = {}
@@ -1231,10 +1256,11 @@ function DropM:_openList()
 			BorderSizePixel = 0, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, ih), LayoutOrder = i, Parent = sf,
 		})
 		corner(frame, th.CornerSmall)
-		local it = { frame = frame, val = val, hov = false, lower = searchable and string.lower(tostring(val)) or nil }
-		it.label = mkLabel(frame, tostring(val), {
+		local text, rich, low = itemText(val, self.Labels, dim("LabelSize"))
+		local it = { frame = frame, val = val, hov = false, lower = searchable and low or nil }
+		it.label = mkLabel(frame, text, {
 			Size = UDim2.new(1, -th.FieldPadX, 1, 0), Position = UDim2.fromOffset(th.FieldPadX / 2, 0), TextXAlignment = Enum.TextXAlignment.Center,
-			TextSize = dim("LabelSize"), TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = c.Muted,
+			TextSize = dim("LabelSize"), TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = c.Muted, RichText = rich,
 		})
 		hover(frame, function() it.hov = true; paint(it) end, function() it.hov = false; paint(it) end, bag)
 		onClick(frame, function()
@@ -1604,7 +1630,7 @@ function GroupM:AddDropdown(idx, info)
 	local meas = mkLabel(field, "", { Name = "Measure", Visible = false, Size = UDim2.fromOffset(0, 0), TextSize = dim("ValueSize"), TextWrapped = false })
 	local obj = setmetatable({
 		Type = "Dropdown", Values = values, Value = value, Multi = multi, AllowNull = info.AllowNull and true or false,
-		Searchable = info.Searchable and true or false,
+		Searchable = info.Searchable and true or false, Labels = type(info.Labels) == "table" and info.Labels or nil,
 			Callback = info.Callback, _row = row, _name = info.Text, _field = field, _fstroke = fst, _text = txt, _scroll = self.Scroll, _hov = false, _meas = meas,
 	}, DropM)
 	obj:_display()
@@ -2209,7 +2235,7 @@ function WindowMT:SetVisible(v, how)
 			frame.Visible = false
 		end
 		frame.Position = rest
-		self.Scale.Scale = base
+		self.Scale.Scale = v and (self.BaseScale or base) or base -- acilis animasyonu sirasinda SetUIScale (kayitli olcek) gelmis olabilir
 		self:_fadeOff()
 		self:_syncLauncher(small and not v)
 		if v then self:_fitOnScreen() end
@@ -2850,6 +2876,7 @@ function Library:CreateWindow(cfg)
 		-- etkin olcek = otomatik sigdirma x kullanici carpani; buyutme ust cubuk + kenar payi ile ekrana sigmayla sinirli
 		local auto = math.clamp(math.min(vp.X / w, vp.Y / h) * th.MobileScaleFactor, th.MobileMinScale, 1)
 		local eff = auto * self.UserScale
+		win._autoScale = auto
 		if eff > auto then
 			local m = th.ScreenMargin
 			local fit = math.min((vp.X - m * 2) / w, (vp.Y - topInset() - m * 2) / h)
@@ -2866,6 +2893,62 @@ function Library:CreateWindow(cfg)
 	rescale()
 	local cam = workspace.CurrentCamera
 	if cam then connect(cam:GetPropertyChangedSignal("ViewportSize"), rescale) end
+
+	-- Sag alt kose olcek tutamaci (Buang tarzi): surukleyince UIScale degisir, sol ust kose sabit kalir.
+	-- Birakinca Library._onUserScale(f) (ThemeManager Pref.scale kaydi) cagrilir.
+	do
+		local gs = compact and th.ScaleGripHitMobile or th.ScaleGripHit
+		local grip = create("TextButton", { Name = "ScaleGrip", Text = "", AutoButtonColor = false, BackgroundTransparency = 1, ZIndex = 20,
+			AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -2, 1, -2), Size = UDim2.fromOffset(gs, gs), Parent = frame })
+		local dots = {}
+		for _, d in ipairs({ { 2, 0 }, { 1, 1 }, { 2, 1 }, { 0, 2 }, { 1, 2 }, { 2, 2 } }) do -- 3 basamakli ucgen nokta deseni
+			local dot = create("Frame", { BorderSizePixel = 0, Size = UDim2.fromOffset(3, 3), ZIndex = 21, AnchorPoint = Vector2.new(1, 1),
+				Position = UDim2.new(1, -3 - (2 - d[1]) * 5, 1, -3 - (2 - d[2]) * 5), Parent = grip })
+			bind(dot, "BackgroundColor3", "Accent")
+			corner(dot, 1)
+			table.insert(dots, dot)
+		end
+		local hot, held = false, false
+		local function paint()
+			local on = hot or held
+			for _, p in ipairs(dots) do p.BackgroundTransparency = on and 0 or th.ScaleGripAlpha end
+		end
+		paint()
+		hover(grip, function() hot = true; paint() end, function() hot = false; paint() end)
+		local s0, sc0, tl0, user0
+		local function topLeft() -- Position/Size/Scale'den (AbsolutePosition olcek oturmadan bayat okunur)
+			local vp, sc, p, ap = gui.AbsoluteSize, scale.Scale, frame.Position, frame.AnchorPoint
+			local sz = Vector2.new(frame.Size.X.Offset * sc, frame.Size.Y.Offset * sc)
+			return Vector2.new(p.X.Scale * vp.X + p.X.Offset - ap.X * sz.X, p.Y.Scale * vp.Y + p.Y.Offset - ap.Y * sz.Y)
+		end
+		track(grip, function(input)
+			if win._animating or not win.Visible then return end
+			held = true; paint()
+			s0, sc0, tl0, user0 = input.Position, scale.Scale, topLeft(), self.UserScale
+		end, function(input)
+			if not s0 then return end
+			local w, h = frame.Size.X.Offset * sc0, frame.Size.Y.Offset * sc0
+			local d = input.Position - s0
+			local r = math.max(0.05, (w + h + d.X + d.Y) / (w + h)) -- kosegen yonundeki cekme orani
+			local auto = win._autoScale or sc0 / (user0 > 0 and user0 or 1) -- otomatik sigdirma carpani (rescale yazar)
+			self.UserScale = math.clamp(sc0 * r / auto, th.UIScaleMin, th.UIScaleMax)
+			rescale()
+			if win.BaseScale < auto * self.UserScale - 1e-4 then self.UserScale = win.BaseScale / auto end -- ekrana sigma siniri: olu bolge birakma
+			local vp, sc, p, ap = gui.AbsoluteSize, scale.Scale, frame.Position, frame.AnchorPoint
+			local sz = Vector2.new(frame.Size.X.Offset * sc, frame.Size.Y.Offset * sc)
+			frame.Position = UDim2.new(p.X.Scale, tl0.X + ap.X * sz.X - p.X.Scale * vp.X, p.Y.Scale, tl0.Y + ap.Y * sz.Y - p.Y.Scale * vp.Y)
+			win._restPos = frame.Position
+		end, function()
+			held = false; paint()
+			if not s0 then return end
+			s0 = nil
+			local pct = math.floor(self.UserScale * 100 + 0.5)
+			self.UserScale = pct / 100
+			task.defer(function() if not self._unloaded then win:_clampIn() end end)
+			if type(self._onUserScale) == "function" then safe(self._onUserScale, pct / 100) end
+		end)
+		win.ScaleGrip = grip
+	end
 
 	-- PC keybind (Library.ToggleKeybind = bir KeyPicker ise onun degeri gecerli)
 	local menuKey = resolveKey(cfg.MenuKeybind)
@@ -2951,7 +3034,7 @@ end
 Library._u = {
 	T = T, dim = dim, create = create, stroke = stroke, corner = corner, bind = bind,
 	tween = tween, mkLabel = mkLabel, track = track, onClick = onClick, hover = hover,
-	connect = connect, makeDraggable = makeDraggable, attachTip = attachTip, esc = esc,
+	connect = connect, makeDraggable = makeDraggable, attachTip = attachTip, esc = esc, itemText = itemText,
 	topInset = topInset, loadAsset = loadLogoAsset, Services = Services, Base = Base,
 	class = class, GroupM = GroupM, TabM = TabM, WindowMT = WindowMT, lockScroll = lockScroll, mountGui = mountGui,
 }
@@ -3486,7 +3569,7 @@ end
 end)()(Library, Library._u)
 ;(function()
 -- PriorityList: surukle-sirala oncelik listesi (TASARIM bolum 4 + 12). GroupM:AddPriorityList(idx, info)
--- info = { Text, Items = {..}, Default = { order = {..}, enabled = { Ad = true } }, Search = false, Height = 8, Tags = { Ad = "Ok"|"Warn"|"Error" }, Tooltip, Callback }
+-- info = { Text, Items = {..}, Default = { order = {..}, enabled = { Ad = true } }, Search = false, Height = 8, Tags = { Ad = "Ok"|"Warn"|"Error" }, Labels = { Ad = "kisa aciklama" }, Tooltip, Callback }
 -- Options[idx].Value = { order = {tum ogeler, sirali}, enabled = { Ad = true } }; :SetValue(v) :SetItems(list) :SetTags(map) :Reset() :SetAll(bool) :OnChanged(fn)
 -- Satir 24px (kompakt 40): sira rozeti (kapaliysa "-"), `::` tutamac, (etiket noktasi), ad, sagda mini daire toggle.
 -- Surukleme yalniz tutamactan (track: mouse + touch). Surukleme sirasinda sutun + liste kaydirmasi kilitli, kenarda otomatik kaydirma.
@@ -3498,13 +3581,17 @@ return function(Library, U)
 	local PL = U.class()
 	local GAP, PADX, PADY, MOVE_T, SCALE_UP = 3, 2, 1, 0.12, 1.03
 
-	local function rowH() return Library._compact and 40 or 24 end
+	-- Labels verilen listede satir iki satirlik (ad + aciklama), bu yuzden daha uzun
+	local function rowH(self)
+		if self and self._labels then return Library._compact and 52 or 34 end
+		return Library._compact and 40 or 24
+	end
 	local function copyList(t)
 		local o = {}
 		for i, v in ipairs(t) do o[i] = v end
 		return o
 	end
-	local function posOf(slot) return UDim2.fromOffset(PADX, PADY + (slot - 1) * (rowH() + GAP)) end
+	local function posOf(self,slot) return UDim2.fromOffset(PADX, PADY + (slot - 1) * (rowH(self) + GAP)) end
 
 	-- Degisim imzasi (OnChanged yalniz gercek degisimde tetiklenir)
 	local function sig(self)
@@ -3574,21 +3661,21 @@ return function(Library, U)
 						r.slot = slot
 						if r.tw then r.tw:Cancel() end
 						if animate then
-							r.tw = tween(r.frame, MOVE_T, { Position = posOf(slot) })
+							r.tw = tween(r.frame, MOVE_T, { Position = posOf(self,slot) })
 						else
-							r.frame.Position = posOf(slot)
+							r.frame.Position = posOf(self,slot)
 						end
 					end
 				end
 			end
 		end
 		self._vis = vis
-		self._list.CanvasSize = UDim2.fromOffset(0, math.max(0, slot * (rowH() + GAP) - GAP + PADY * 2))
+		self._list.CanvasSize = UDim2.fromOffset(0, math.max(0, slot * (rowH(self) + GAP) - GAP + PADY * 2))
 	end
 
 	function PL:_fitHeight()
 		local n = math.max(1, math.min(self.Height, #self._order))
-		self._list.Size = UDim2.new(1, 0, 0, n * (rowH() + GAP) - GAP + PADY * 2)
+		self._list.Size = UDim2.new(1, 0, 0, n * (rowH(self) + GAP) - GAP + PADY * 2)
 	end
 
 	-- ---- Surukleme -------------------------------------------------------------------------------
@@ -3597,7 +3684,7 @@ return function(Library, U)
 		if not dr then return end
 		local pitch = dr.pitch
 		local top = PADY + (dr.cur - 1) * pitch
-		local y = (dr.cur > dr.from) and (top + rowH() + GAP / 2 - 1) or (top - GAP / 2 - 1)
+		local y = (dr.cur > dr.from) and (top + rowH(self) + GAP / 2 - 1) or (top - GAP / 2 - 1)
 		self._line.Position = UDim2.fromOffset(PADX, math.max(0, y))
 		self._line.Visible = true
 	end
@@ -3630,8 +3717,8 @@ return function(Library, U)
 		local list = self._list
 		local ab = r.frame.AbsoluteSize.Y
 		local dr = {
-			name = name, r = r, from = from, cur = from, pitch = rowH() + GAP, s = (ab > 0) and ab / rowH() or 1,
-			y0 = PADY + (from - 1) * (rowH() + GAP), p0 = y, py = y, cp0 = list.CanvasPosition.Y,
+			name = name, r = r, from = from, cur = from, pitch = rowH(self) + GAP, s = (ab > 0) and ab / rowH(self) or 1,
+			y0 = PADY + (from - 1) * (rowH(self) + GAP), p0 = y, py = y, cp0 = list.CanvasPosition.Y,
 		}
 		dr.y = dr.y0
 		self._dr = dr
@@ -3651,12 +3738,12 @@ return function(Library, U)
 			end
 			local vh = list.AbsoluteSize.Y / dr.s
 			local vy = dr.y - list.CanvasPosition.Y / dr.s
-			local edge = rowH() * 1.2
+			local edge = rowH(self) * 1.2
 			local d = 0
 			if vy < edge then
 				d = -(edge - vy) / edge
-			elseif vy + rowH() > vh - edge then
-				d = (vy + rowH() - (vh - edge)) / edge
+			elseif vy + rowH(self) > vh - edge then
+				d = (vy + rowH(self) - (vh - edge)) / edge
 			end
 			if d ~= 0 then
 				d = math.clamp(d, -1.5, 1.5)
@@ -3709,10 +3796,10 @@ return function(Library, U)
 	function PL:_makeRow(name)
 		local th = T()
 		local c = th.Colors
-		local h = rowH()
+		local h = rowH(self)
 		local compact = Library._compact
 		local bag = {}
-		local f = create("Frame", { Name = "Row", Size = UDim2.new(1, -(PADX * 2 + 4), 0, h), Position = posOf(1), BackgroundColor3 = c.Field, BorderSizePixel = 0, Parent = self._list })
+		local f = create("Frame", { Name = "Row", Size = UDim2.new(1, -(PADX * 2 + 4), 0, h), Position = posOf(self,1), BackgroundColor3 = c.Field, BorderSizePixel = 0, Parent = self._list })
 		corner(f, th.CornerField)
 		local fs = stroke(f)
 		bind(fs, "Color", "Accent")
@@ -3727,7 +3814,8 @@ return function(Library, U)
 			Name = "Handle", AutoButtonColor = false, Text = "::", FontFace = th.FontFaceBold, TextSize = 12, TextColor3 = c.Dim,
 			BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(hx, 0), Size = UDim2.fromOffset(hw, h), Parent = f,
 		})
-		local r = { name = name, lower = string.lower(name), frame = f, fs = fs, badge = badge, badgeTxt = badgeTxt, handle = handle, bag = bag, hov = false, hhov = false }
+		local text, rich, low, plain = U.itemText(name, self._labels, dim("TextSize"), true)
+		local r = { name = name, lower = low, frame = f, fs = fs, badge = badge, badgeTxt = badgeTxt, handle = handle, bag = bag, hov = false, hhov = false }
 		local tag = self._tags[name]
 		local nx = hx + hw + 2
 		if tag then
@@ -3737,7 +3825,8 @@ return function(Library, U)
 			nx += 10
 		end
 		local hitW = compact and 44 or 34
-		r.nameLbl = mkLabel(f, name, { Position = UDim2.fromOffset(nx, 0), Size = UDim2.new(1, -(nx + hitW), 1, 0), TextSize = dim("TextSize"), TextTruncate = Enum.TextTruncate.AtEnd })
+		r.nameLbl = mkLabel(f, text, { Position = UDim2.fromOffset(nx, 0), Size = UDim2.new(1, -(nx + hitW), 1, 0), TextSize = dim("TextSize"), TextTruncate = Enum.TextTruncate.AtEnd, RichText = rich })
+		if plain then attachTip(r.nameLbl, plain) end -- dar sutunda aciklama kirpilirsa tamami tooltip'te
 		local hit = create("Frame", { Name = "Hit", AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0, hitW, 1, 0), BackgroundTransparency = 1, Active = true, Parent = f })
 		local sz = compact and 18 or 14
 		r.sw = create("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = c.Line2, BorderSizePixel = 0, Parent = hit })
@@ -3930,7 +4019,7 @@ return function(Library, U)
 		local lbl = mkLabel(head, info.Text or idx, { Size = search and UDim2.new(1, 0, 0, lblH) or UDim2.new(1, -64, 1, 0), TextColor3 = c.Muted, TextTruncate = Enum.TextTruncate.AtEnd })
 		local obj = setmetatable({
 			Type = "PriorityList", Height = math.max(1, tonumber(info.Height) or 8), _row = row, _label = lbl,
-			_rows = {}, _order = {}, _on = {}, _vis = {}, _filter = "", _tags = type(info.Tags) == "table" and info.Tags or {}, _scroll = self.Scroll,
+			_rows = {}, _order = {}, _on = {}, _vis = {}, _filter = "", _tags = type(info.Tags) == "table" and info.Tags or {}, _labels = type(info.Labels) == "table" and info.Labels or nil, _scroll = self.Scroll,
 		}, PL)
 		if search then
 			miniBtn(btns, "All on", 1, function() obj:SetAll(true) end, btnH)
@@ -5471,17 +5560,18 @@ return function(Library)
 			task.delay(0.5, function() if my == saveTok then self:SavePreference() end end)
 		end)
 
-		box:AddSlider("KaiUI_UIScale", { Text = "UI Scale", Min = 70, Max = 130, Default = self.Pref.scale or 100, Rounding = 0, Suffix = "%", Finished = true,
-			Live = function(v) Library:SetUIScaleLive(v / 100, Library.Options.KaiUI_UIScale) end }) -- surukleme: pencere canli olceklenir, knob parmak altinda kalir
-		local lastScale = Library.Options.KaiUI_UIScale.Value
-		Library.Options.KaiUI_UIScale:OnChanged(function()
-			local v = Library.Options.KaiUI_UIScale.Value
-			if loading or v == lastScale then return end -- yukleme / sarmalayici cagrilari dosyaya yazmaz
-			lastScale = v
+		-- UI olcegi pencerenin sag alt kose tutamaciyla degisir (KaiUI.luau ScaleGrip); birakinca buraya kaydedilir
+		Library._onUserScale = function(f)
+			local v = math.clamp(math.floor(f * 100 + 0.5), 70, 130)
+			if v == self.Pref.scale then return end
 			self.Pref.scale = v
-			self:Apply()
 			self:SavePreference()
-		end)
+		end
+		box:AddButton({ Text = "Reset scale (100%)", Func = function()
+			Library:SetUIScale(1)
+			self.Pref.scale = 100
+			self:SavePreference()
+		end })
 
 		if #fonts > 0 then
 			box:AddDropdown("KaiUI_Font", { Text = "Font", Values = fonts,
