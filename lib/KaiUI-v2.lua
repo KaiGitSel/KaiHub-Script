@@ -2307,6 +2307,24 @@ function WindowMT:Minimize() -- pencereyi K muhruna dogru kucultur; ekranda suru
 	self:_syncLauncher()
 end
 
+-- Baslik avatari: hidden = headshot gizli, K kutusu gorunur (ornegin gizlilik modu). Yukleme bitince de bu kural uygulanir.
+function WindowMT._paintAvatar(a)
+	if a.loaded == nil then -- headshot hala yukleniyor: K altta, resim gizli degilse ustte
+		a.img.Visible = not a.hidden
+		a.kf.Visible = true
+	else
+		a.img.Visible = a.loaded and not a.hidden
+		a.kf.Visible = not a.img.Visible
+	end
+end
+function WindowMT:SetAvatarHidden(hidden)
+	local a = self._avatar
+	if not a then return end -- kompakt baslikta avatar yok
+	a.hidden = hidden == true
+	if not a.hidden and a.loaded == false and a.load then a.load() return end -- gizliyken yuklenemedi: tekrar dene
+	WindowMT._paintAvatar(a)
+end
+
 -- Pivot'u (surukleme sirasinda kaydirilan AnchorPoint) merkeze geri al; pencere yerinden oynamaz.
 function WindowMT:_endPivot()
 	local fr = self.Frame
@@ -2731,6 +2749,7 @@ function Library:CreateWindow(cfg)
 		roundBtn(cluster, 2, bs, dashG, function() winRef:Minimize() end).Name = "Minimize"
 	end
 	roundBtn(cluster, 3, bs, crossG, function() winRef:Minimize() end).Name = "Close" -- x = launcher'a kucult (Unload degil)
+	local avatar -- { img, kf, loaded = nil(yukleniyor)|true|false, hidden }; WindowMT:SetAvatarHidden okur
 	if not compact then -- 56px avatar: headshot, yuklenmezse K; yesil cevrimici noktasi
 		local wrap = create("Frame", { Name = "Avatar", BackgroundTransparency = 1, Size = UDim2.fromOffset(56, 56), LayoutOrder = 4, Parent = cluster })
 		local av = create("Frame", { BackgroundColor3 = th.Colors.Card, BorderSizePixel = 0, ClipsDescendants = true, Size = UDim2.fromScale(1, 1), Parent = wrap })
@@ -2749,17 +2768,26 @@ function Library:CreateWindow(cfg)
 		bind(dot, "BackgroundColor3", "Ok")
 		local ds = stroke(dot, th.Colors.Bg)
 		ds.Thickness = 1.5
+		avatar = { img = img, kf = kf, hidden = false }
 		local lp = Services.Players.LocalPlayer
 		if lp then
 			pcall(function() img.Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150", lp.UserId) end)
-			task.spawn(function()
-				local t0 = os.clock()
-				while img.Parent and not img.IsLoaded and os.clock() - t0 < 6 and not Library._unloaded do task.wait(0.2) end
-				if not img.Parent then return end
-				if img.IsLoaded then kf.Visible = false else img.Visible = false end
-			end)
+			-- gorunmez ImageLabel yuklenmez: gizliyken bekleme biterse loaded=false kalir, SetAvatarHidden(false) yeniden dener
+			avatar.load = function()
+				avatar.loaded = nil
+				WindowMT._paintAvatar(avatar)
+				task.spawn(function()
+					local t0 = os.clock()
+					while img.Parent and not img.IsLoaded and os.clock() - t0 < 6 and not Library._unloaded do task.wait(0.2) end
+					if not img.Parent then return end
+					avatar.loaded = img.IsLoaded == true
+					WindowMT._paintAvatar(avatar) -- gizli durumu ezmez
+				end)
+			end
+			avatar.load()
 		else
-			img.Visible = false
+			avatar.loaded = false
+			WindowMT._paintAvatar(avatar)
 		end
 	end
 
@@ -2857,6 +2885,7 @@ function Library:CreateWindow(cfg)
 		Library = self, Frame = frame, Header = header, Body = body, Scale = scale,
 		HdrName = pname, HdrDesc = pdesc, HdrIconText = itext, HdrIconImg = iimg, _hdrNameX = nameX, _hdrNameY0 = nameY0, _hdrNameY1 = nameY1,
 		TabBar = tabBar, Pages = pages, Visible = false, Tabs = {}, BaseScale = 1, _frameStroke = frameStroke, _catIdx = {}, _catList = {}, _catHdr = {},
+		_avatar = avatar,
 	}, WindowMT)
 	self.Window = win
 
