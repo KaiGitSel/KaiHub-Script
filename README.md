@@ -14,7 +14,7 @@ Publish only `loader.lua`, `version.json`, `builds/`, `lib/`, `configs/` and `RE
 - `kill` / `message`: per-game value wins over the top-level one; missing = top-level applies.
 - Build names must be unique on every release (`kaihub-al-20261026.lua`, same day: `kaihub-al-20261026-2.lua`). Roblox HttpGet caches by URL, so a reused name can serve the old build.
 - Top-level `file` is read only by the old loader (before `games`). Keep it (AL build) during the raw.githubusercontent cache window and for anyone with an old copy; the new loader ignores it.
-- Game ids: Anime Legacy (al) = 10765902945, Anime Adventures (aa) = 3183403065.
+- Game ids: Anime Legacy (al) = 10765902945, Anime Adventures (aa) = 3183403065, Throw a Seed (tas) = 10775182046.
 
 ## Release steps
 1. Luraph build of each changed game (Kaisel does it) -> `builds/kaihub-<game>-<YYYYMMDD>.lua`.
