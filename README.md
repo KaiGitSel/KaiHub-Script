@@ -24,6 +24,3 @@ Publish only `loader.lua`, `version.json`, `builds/`, `lib/`, `configs/` and `RE
 5. Check raw `version.json` and each build URL return 200.
 6. Rejoin the game (HttpGet URL cache), run the loader, smoke test.
 Local test: point `BASE` at a copy that serves `version-test.json` as `version.json` and run `loader.lua` in each game.
-
-## Configs
-`configs/AA-AprilFools-KaiHub.json` (single line, import through Settings -> Configs). Note: after import the bot plays by itself: it joins its own match, replays, and sets the Auto Execute flag.
